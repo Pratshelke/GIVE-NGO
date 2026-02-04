@@ -1,0 +1,6 @@
+# Root ignores
+web/node_modules
+web/dist
+.env*
+
+

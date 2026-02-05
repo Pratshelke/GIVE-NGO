@@ -424,7 +424,7 @@ app.get("/donations", auth, async (req, res) => {
       filter = {};
     }
 
-    const donations = await Donation.find(filter);
+    const donations = await Donation.find(filter).populate('currentNgoId', 'name');
 
     // Check and update expired donations
     const now = new Date();

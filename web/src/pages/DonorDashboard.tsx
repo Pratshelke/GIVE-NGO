@@ -11,6 +11,7 @@ type Donation = {
   description?: string
   createdAt: string
   expiresAt?: string
+  currentNgoId?: { _id: string; name: string }
 }
 
 // Active statuses (donations in progress)
@@ -391,6 +392,11 @@ function DonationCard({
         <div style={{ fontSize: '13px', color: '#9ca3af', marginTop: '4px' }}>
           {statusInfo.helpText}
         </div>
+        {['reserved', 'in_transit', 'completed'].includes(donation.status) && donation.currentNgoId && (
+          <div style={{ fontSize: '13px', color: '#16a34a', marginTop: '4px', fontWeight: 500 }}>
+            Pick up accepted by: {donation.currentNgoId.name}
+          </div>
+        )}
       </div>
 
       {/* Right: Actions (only for pending) */}
@@ -507,14 +513,14 @@ function getStatusInfo(status: string) {
         label: 'Completed',
         color: '#16a34a',
         bgColor: '#dcfce7',
-        helpText: '🎉 Successfully donated',
+        helpText: 'Successfully donated',
       }
     case 'expired':
       return {
         label: 'Expired',
         color: '#6b7280',
         bgColor: '#f3f4f6',
-        helpText: '⌛ Donation expired or cancelled',
+        helpText: 'Donation expired or cancelled',
       }
     default:
       return {

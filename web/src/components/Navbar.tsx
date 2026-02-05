@@ -58,7 +58,6 @@ export function Navbar() {
             gap: '8px',
           }}
         >
-          <span style={{ fontSize: '24px' }}>🍽️</span>
           GiveNGo
         </div>
 
@@ -161,16 +160,14 @@ export function Navbar() {
                     <DropdownItem
                       label="View Profile"
                       onClick={() => {
-                        // TODO: Navigate to profile page when implemented
-                        alert('Profile page coming soon!')
+                        navigate('/profile')
                         setShowDropdown(false)
                       }}
                     />
                     <DropdownItem
                       label="Edit Profile"
                       onClick={() => {
-                        // TODO: Navigate to edit profile page when implemented
-                        alert('Edit profile coming soon!')
+                        navigate('/profile')
                         setShowDropdown(false)
                       }}
                     />

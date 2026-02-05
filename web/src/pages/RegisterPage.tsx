@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { useAuth } from '../contexts/AuthContext'
+import { useNavigate } from 'react-router-dom'
+import { api } from '../lib/axios'
 import { GooglePlacesInput } from '../components/GooglePlacesInput'
 
 export function RegisterPage() {
-  const { register } = useAuth()
+  const navigate = useNavigate()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -11,6 +12,7 @@ export function RegisterPage() {
   const [role, setRole] = useState<'Donor' | 'NGO'>('Donor')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [success, setSuccess] = useState(false)
 
   // NGO location fields
   const [address, setAddress] = useState('')
@@ -47,18 +49,26 @@ export function RegisterPage() {
         coordinates: [location.lng, location.lat] as [number, number]
       } : undefined
 
-      // Call register from auth context
-      await register(
-        name.trim(),
-        email.trim(),
-        password.trim(),
+      // Build payload
+      const payload: any = {
+        name: name.trim(),
+        email: email.trim(),
+        password: password.trim(),
         role,
-        phoneNumber.trim(),
-        role === 'NGO' ? address : undefined,
-        locationData
-      )
+        phoneNumber: phoneNumber.trim()
+      }
 
-      // Navigation will be handled by App.tsx based on user role
+      // Add NGO-specific fields
+      if (role === 'NGO') {
+        payload.address = address
+        payload.location = locationData
+      }
+
+      // Call API directly (do NOT auto-login)
+      await api.post('/auth/register', payload)
+
+      // Show success message instead of auto-login
+      setSuccess(true)
     } catch (err: any) {
       console.error('Registration error:', err)
       setError(err.response?.data?.message || 'Registration failed. Please try again.')
@@ -127,136 +137,168 @@ export function RegisterPage() {
               backgroundColor: '#ffffff',
             }}
           >
-            <form onSubmit={handleSubmit}>
-              {/* Error Message */}
-              {error && (
-                <div
+            {success ? (
+              /* SUCCESS MESSAGE */
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '48px', marginBottom: '16px' }}>✅</div>
+                <h2
                   style={{
-                    padding: '12px 16px',
-                    backgroundColor: '#fef2f2',
-                    border: '1px solid #fecaca',
-                    borderRadius: '8px',
-                    color: '#dc2626',
-                    fontSize: '14px',
-                    marginBottom: '20px',
+                    fontSize: '24px',
+                    fontWeight: 600,
+                    color: '#16a34a',
+                    marginBottom: '12px',
                   }}
                 >
-                  {error}
-                </div>
-              )}
-
-              {/* Name */}
-              <div style={{ marginBottom: '20px' }}>
-                <label style={labelStyle}>Name *</label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Enter your name"
-                  style={inputStyle}
-                  disabled={loading}
-                />
-              </div>
-
-              {/* Email */}
-              <div style={{ marginBottom: '20px' }}>
-                <label style={labelStyle}>Email *</label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="Enter your email"
-                  style={inputStyle}
-                  disabled={loading}
-                />
-              </div>
-
-              {/* Password */}
-              <div style={{ marginBottom: '20px' }}>
-                <label style={labelStyle}>Password *</label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Create a password"
-                  style={inputStyle}
-                  disabled={loading}
-                />
-              </div>
-
-              {/* Phone Number */}
-              <div style={{ marginBottom: '20px' }}>
-                <label style={labelStyle}>Phone Number *</label>
-                <input
-                  type="tel"
-                  value={phoneNumber}
-                  onChange={(e) => setPhoneNumber(e.target.value)}
-                  placeholder="Enter your phone number"
-                  style={inputStyle}
-                  disabled={loading}
-                />
-              </div>
-
-              {/* Role */}
-              <div style={{ marginBottom: '20px' }}>
-                <label style={labelStyle}>Register as *</label>
-                <select
-                  value={role}
-                  onChange={(e) => {
-                    setRole(e.target.value as 'Donor' | 'NGO')
-                    // Clear NGO fields when switching to Donor
-                    if (e.target.value === 'Donor') {
-                      setAddress('')
-                      setLocation(null)
-                    }
+                  Registration Successful!
+                </h2>
+                <p
+                  style={{
+                    fontSize: '16px',
+                    color: '#4b5563',
+                    marginBottom: '24px',
                   }}
-                  style={inputStyle}
-                  disabled={loading}
                 >
-                  <option value="Donor">Donor</option>
-                  <option value="NGO">NGO</option>
-                </select>
+                  Please login to continue.
+                </p>
+                <button
+                  onClick={() => navigate('/login')}
+                  style={primaryButton}
+                >
+                  Go to Login
+                </button>
               </div>
+            ) : (
+              <form onSubmit={handleSubmit}>
+                {/* Error Message */}
+                {error && (
+                  <div
+                    style={{
+                      padding: '12px 16px',
+                      backgroundColor: '#fef2f2',
+                      border: '1px solid #fecaca',
+                      borderRadius: '8px',
+                      color: '#dc2626',
+                      fontSize: '14px',
+                      marginBottom: '20px',
+                    }}
+                  >
+                    {error}
+                  </div>
+                )}
 
-              {/* NGO Address (conditional) */}
-              {role === 'NGO' && (
+                {/* Name */}
                 <div style={{ marginBottom: '20px' }}>
-                  <label style={labelStyle}>Organization Address *</label>
-                  <GooglePlacesInput
-                    placeholder="Search for your organization address..."
-                    onPlaceSelect={handlePlaceSelect}
+                  <label style={labelStyle}>Name *</label>
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="Enter your name"
+                    style={inputStyle}
+                    disabled={loading}
                   />
-                  {address && (
-                    <div
-                      style={{
-                        marginTop: '8px',
-                        padding: '8px 12px',
-                        backgroundColor: '#f0fdf4',
-                        border: '1px solid #bbf7d0',
-                        borderRadius: '6px',
-                        color: '#16a34a',
-                        fontSize: '13px',
-                      }}
-                    >
-                      Selected: {address}
-                    </div>
-                  )}
                 </div>
-              )}
 
-              {/* Submit */}
-              <button
-                type="submit"
-                disabled={loading}
-                style={{
-                  ...primaryButton,
-                  opacity: loading ? 0.7 : 1,
-                  cursor: loading ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {loading ? 'Creating Account...' : 'Register'}
-              </button>
-            </form>
+                {/* Email */}
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={labelStyle}>Email *</label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="Enter your email"
+                    style={inputStyle}
+                    disabled={loading}
+                  />
+                </div>
+
+                {/* Password */}
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={labelStyle}>Password *</label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Create a password"
+                    style={inputStyle}
+                    disabled={loading}
+                  />
+                </div>
+
+                {/* Phone Number */}
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={labelStyle}>Phone Number *</label>
+                  <input
+                    type="tel"
+                    value={phoneNumber}
+                    onChange={(e) => setPhoneNumber(e.target.value)}
+                    placeholder="Enter your phone number"
+                    style={inputStyle}
+                    disabled={loading}
+                  />
+                </div>
+
+                {/* Role */}
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={labelStyle}>Register as *</label>
+                  <select
+                    value={role}
+                    onChange={(e) => {
+                      setRole(e.target.value as 'Donor' | 'NGO')
+                      // Clear NGO fields when switching to Donor
+                      if (e.target.value === 'Donor') {
+                        setAddress('')
+                        setLocation(null)
+                      }
+                    }}
+                    style={inputStyle}
+                    disabled={loading}
+                  >
+                    <option value="Donor">Donor</option>
+                    <option value="NGO">NGO</option>
+                  </select>
+                </div>
+
+                {/* NGO Address (conditional) */}
+                {role === 'NGO' && (
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={labelStyle}>Organization Address *</label>
+                    <GooglePlacesInput
+                      placeholder="Search for your organization address..."
+                      onPlaceSelect={handlePlaceSelect}
+                    />
+                    {address && (
+                      <div
+                        style={{
+                          marginTop: '8px',
+                          padding: '8px 12px',
+                          backgroundColor: '#f0fdf4',
+                          border: '1px solid #bbf7d0',
+                          borderRadius: '6px',
+                          color: '#16a34a',
+                          fontSize: '13px',
+                        }}
+                      >
+                        Selected: {address}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Submit */}
+                <button
+                  type="submit"
+                  disabled={loading}
+                  style={{
+                    ...primaryButton,
+                    opacity: loading ? 0.7 : 1,
+                    cursor: loading ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {loading ? 'Creating Account...' : 'Register'}
+                </button>
+              </form>
+            )}
           </div>
         </div>
       </section>

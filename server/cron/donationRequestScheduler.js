@@ -7,6 +7,9 @@ const Request = require('../models/Request');
 const User = require('../models/User');
 const { haversineDistance } = require('../utils/haversine');
 
+// Maximum distance in kilometers for NGO assignment
+const MAX_DISTANCE_KM = 20;
+
 // Track if scheduler is already running (singleton pattern)
 let isSchedulerRunning = false;
 
@@ -17,23 +20,21 @@ let isSchedulerRunning = false;
 function startDonationScheduler() {
     // Prevent duplicate scheduler registration
     if (isSchedulerRunning) {
-        console.log('[CRON] Donation scheduler already running, skipping duplicate registration');
+        console.log('Donation scheduler already running, skipping duplicate registration');
         return;
     }
 
     isSchedulerRunning = true;
 
-    console.log('[CRON] Donation scheduler started - runs every 1 minute');
+    console.log('Donation scheduler started and will run every 1 minute');
 
     // Schedule job to run every minute
     cron.schedule('*/1 * * * *', async () => {
         const now = new Date();
-        console.log(`\n[CRON] ========== Scheduler run at ${now.toISOString()} ==========`);
+        console.log(`\nCRON scheduler running at ${now.toLocaleString()}`);
 
         try {
-            // ============================================
-            // STEP 1: Expire donations past their expiresAt
-            // ============================================
+            // Expire donations past their expiresAt
             const expiredDonationsResult = await Donation.updateMany(
                 {
                     expiresAt: { $lte: now },
@@ -43,7 +44,7 @@ function startDonationScheduler() {
             );
 
             if (expiredDonationsResult.modifiedCount > 0) {
-                console.log(`[CRON] Step 1: Expired ${expiredDonationsResult.modifiedCount} donation(s)`);
+                console.log(`Marked ${expiredDonationsResult.modifiedCount} donation as expired`);
 
                 // Also expire all pending requests for these donations
                 const expiredDonations = await Donation.find({
@@ -63,16 +64,12 @@ function startDonationScheduler() {
                     );
 
                     if (expiredRequestsResult.modifiedCount > 0) {
-                        console.log(`[CRON] Step 1: Expired ${expiredRequestsResult.modifiedCount} related request(s)`);
+                        console.log(`Expired ${expiredRequestsResult.modifiedCount} related request`);
                     }
                 }
-            } else {
-                console.log('[CRON] Step 1: No donations to expire');
             }
 
-            // ============================================
-            // STEP 2: Expire requests past their expiresAt
-            // ============================================
+            // Expire requests past their expiresAt
             const expiredRequestsResult = await Request.updateMany(
                 {
                     status: 'pending',
@@ -82,14 +79,10 @@ function startDonationScheduler() {
             );
 
             if (expiredRequestsResult.modifiedCount > 0) {
-                console.log(`[CRON] Step 2: Expired ${expiredRequestsResult.modifiedCount} timed-out request(s)`);
-            } else {
-                console.log('[CRON] Step 2: No requests to expire');
+                console.log(`Expired ${expiredRequestsResult.modifiedCount} timed-out request`);
             }
 
-            // ============================================
-            // STEP 3: Find donations needing NGO assignment
-            // ============================================
+            // Find donations needing NGO assignment
             // Only select donations that are:
             // - status = 'pending' (NOT reserved, completed, expired, or in_transit)
             // - expiresAt > now (not yet expired)
@@ -99,7 +92,7 @@ function startDonationScheduler() {
                 expiresAt: { $gt: now }
             });
 
-            console.log(`[CRON] Step 3: Found ${pendingDonations.length} pending donation(s) to check`);
+            console.log('Checking pending donations');
 
             // Filter out donations that already have a pending request
             const donationsNeedingAssignment = [];
@@ -115,18 +108,20 @@ function startDonationScheduler() {
                 }
             }
 
-            console.log(`[CRON] Step 3: ${donationsNeedingAssignment.length} donation(s) need NGO assignment`);
+            if (donationsNeedingAssignment.length > 0) {
+                console.log(`Found ${donationsNeedingAssignment.length} donation needing NGO assignment`);
+            }
 
-            // ============================================
-            // STEP 4 & 5: Find nearest NGO and create request
-            // ============================================
+            // Find nearest NGO and create request for each donation
             for (const donation of donationsNeedingAssignment) {
                 // Double-check donation is still pending (idempotency)
                 const freshDonation = await Donation.findById(donation._id);
                 if (!freshDonation || freshDonation.status !== 'pending') {
-                    console.log(`[CRON] Skipping donation ${donation._id} - status changed`);
+                    console.log(`Donation expired, skipping further processing`);
                     continue;
                 }
+
+                console.log(`Donation '${donation.title}' needs NGO assignment`);
 
                 // Get all NGOs that have already been requested for this donation
                 const existingRequests = await Request.find({
@@ -155,17 +150,23 @@ function startDonationScheduler() {
                             donation.location.coordinates,
                             ngo.location.coordinates
                         )
-                    }))
-                    .sort((a, b) => a.distance - b.distance);
+                    }));
 
-                if (ngosWithDistance.length === 0) {
-                    console.log(`[CRON] Step 4: No eligible NGOs for donation ${donation._id}`);
+                // Filter NGOs within 20 km radius
+                const ngosWithinRadius = ngosWithDistance.filter(item => item.distance <= MAX_DISTANCE_KM);
+
+                if (ngosWithinRadius.length === 0) {
+                    console.log(`No NGOs found within ${MAX_DISTANCE_KM} km for donation '${donation.title}'`);
                     continue;
                 }
 
-                // Select nearest NGO
-                const nearestNgo = ngosWithDistance[0];
-                console.log(`[CRON] Step 4: Nearest NGO for donation ${donation._id} is ${nearestNgo.ngo._id} (${nearestNgo.distance.toFixed(2)} km)`);
+                console.log(`Found ${ngosWithinRadius.length} NGOs within ${MAX_DISTANCE_KM} km`);
+
+                // Sort by distance and select nearest NGO
+                ngosWithinRadius.sort((a, b) => a.distance - b.distance);
+                const nearestNgo = ngosWithinRadius[0];
+
+                console.log(`Nearest NGO is '${nearestNgo.ngo.name}' at ${nearestNgo.distance.toFixed(1)} km`);
 
                 // Create request with 10-minute expiry
                 const requestExpiresAt = new Date(now.getTime() + 10 * 60 * 1000);
@@ -180,13 +181,13 @@ function startDonationScheduler() {
 
                 await newRequest.save();
 
-                console.log(`[CRON] Step 5: Created request ${newRequest._id} for NGO ${nearestNgo.ngo._id} (expires at ${requestExpiresAt.toISOString()})`);
+                console.log(`Request created for NGO '${nearestNgo.ngo.name}'`);
             }
 
-            console.log('[CRON] ========== Scheduler run complete ==========\n');
+            console.log('Scheduler run complete\n');
 
         } catch (error) {
-            console.error('[CRON] Error in donation scheduler:', error.message);
+            console.error('Error in donation scheduler:', error.message);
         }
     });
 }

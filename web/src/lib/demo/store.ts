@@ -27,7 +27,7 @@ export type Db = {
 }
 
 const KEY = 'givengo-demo-db'
-const VERSION = 3
+const VERSION = 4
 export const DB_EVENT = 'givengo:db'
 
 /** Timings (ms). Request window matches the backend; bots respond fast so demos flow. */
@@ -161,13 +161,13 @@ function seed(): Db {
   // History for impact numbers and the donor's "past" tab
   const history: [string, string, DbDonation['category'], string, number, number, string][] = [
     ['Rice, sambar & sabzi', 'u_donor', 'cooked', '12 kg', 48, 1, 'u_ngo'],
-    ['Fresh vegetables crate', 'u_donor', 'produce', '25 kg', 60, 3, 'u_ngo_10001'],
-    ['Packaged snacks', 'u_donor', 'packaged', '80 packs', 80, 6, 'u_ngo'],
-    ['Milk and curd', 'u_donor', 'dairy', '20 L', 40, 9, 'u_ngo_10002'],
+    ['Fresh vegetables crate', 'u_donor', 'produce', '25 kg', 60, 10, 'u_ngo_10001'],
+    ['Packaged snacks', 'u_donor', 'packaged', '80 packs', 80, 19, 'u_ngo'],
+    ['Milk and curd', 'u_donor', 'dairy', '20 L', 40, 26, 'u_ngo_10002'],
     ['Pulao & raita', 'u_donor_2', 'cooked', '15 kg', 60, 2, 'u_ngo_10006'],
     ['Bread loaves', 'u_donor_3', 'bakery', '45 loaves', 90, 4, 'u_ngo'],
     ['Fruit boxes', 'u_donor_2', 'produce', '30 kg', 75, 8, 'u_ngo_10003'],
-    ['Thali meals', 'u_donor', 'cooked', '22 kg', 85, 12, 'u_ngo_10004'],
+    ['Thali meals', 'u_donor', 'cooked', '22 kg', 85, 40, 'u_ngo_10004'],
     ['Biscuits & juice', 'u_donor_3', 'packaged', '120 packs', 120, 15, 'u_ngo'],
   ]
   history.forEach(([title, donorId, cat, qty, servings, daysAgo, ngoId], i) => {

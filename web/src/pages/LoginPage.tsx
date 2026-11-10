@@ -1,173 +1,79 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import type { FormEvent } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import { DEMO_MODE, errorMessage } from '../lib/axios'
+import { DEMO_ACCOUNTS } from '../lib/demo/store'
 
 export function LoginPage() {
-  const navigate = useNavigate()
   const { login } = useAuth()
+  const navigate = useNavigate()
+  const location = useLocation()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const go = async (e: string, p: string) => {
     setError('')
-    setLoading(true)
-
+    setBusy(true)
     try {
-      await login(email, password)
-
-      // Navigation will be handled by App.tsx after login
-      // User will be redirected based on their role
-    } catch (err: any) {
-      console.error('Login error:', err)
-      setError(err.response?.data?.message || 'Login failed. Please check your credentials.')
+      const u = await login(e, p)
+      const from = (location.state as { from?: string } | null)?.from
+      navigate(from && from !== '/login' ? from : u.role === 'NGO' ? '/ngo' : '/donor', { replace: true })
+    } catch (err) {
+      setError(errorMessage(err, 'Could not log in. Check your email and password.'))
     } finally {
-      setLoading(false)
+      setBusy(false)
     }
   }
 
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    go(email, password)
+  }
+
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        backgroundColor: '#ffffff',
-        display: 'flex',
-        alignItems: 'center',
-      }}
-    >
-      <section
-        style={{
-          width: '100%',
-          padding: '80px 32px',
-        }}
-      >
-        <div
-          style={{
-            maxWidth: '1100px',
-            margin: '0 auto',
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: '64px',
-            alignItems: 'center',
-          }}
-        >
-          {/* LEFT INFO */}
-          <div>
-            <h1
-              style={{
-                fontSize: '40px',
-                fontWeight: 700,
-                color: '#1f2933',
-                marginBottom: '16px',
-              }}
-            >
-              Welcome Back
-            </h1>
-
-            <p
-              style={{
-                fontSize: '18px',
-                color: '#4b5563',
-                maxWidth: '420px',
-                lineHeight: 1.6,
-              }}
-            >
-              Login to continue managing donations and requests on the GiveNGo platform.
-            </p>
-          </div>
-
-          {/* FORM */}
-          <div
-            style={{
-              border: '1px solid #e5e7eb',
-              borderRadius: '16px',
-              padding: '40px',
-              backgroundColor: '#ffffff',
-            }}
-          >
-            <form onSubmit={handleSubmit}>
-              <div style={{ marginBottom: '20px' }}>
-                <label style={labelStyle}>Email</label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  style={inputStyle}
-                />
-              </div>
-
-              <div style={{ marginBottom: '20px' }}>
-                <label style={labelStyle}>Password</label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  style={inputStyle}
-                />
-              </div>
-
-              {error && (
-                <div style={{
-                  padding: '12px',
-                  backgroundColor: '#fef2f2',
-                  border: '1px solid #fecaca',
-                  borderRadius: '8px',
-                  color: '#dc2626',
-                  fontSize: '14px',
-                  marginBottom: '20px'
-                }}>
-                  {error}
-                </div>
-              )}
-
-              <button
-                type="submit"
-                style={{
-                  ...primaryButton,
-                  opacity: loading ? 0.7 : 1,
-                  cursor: loading ? 'not-allowed' : 'pointer'
-                }}
-                disabled={loading}
-              >
-                {loading ? 'Logging in...' : 'Login'}
-              </button>
-            </form>
-          </div>
+    <div className="container page" style={{ maxWidth: 460 }}>
+      <div className="stack" style={{ gap: 6 }}>
+        <h2>Welcome back</h2>
+        <p className="muted">Log in to post food or manage pickups.</p>
+      </div>
+      <form className="card raised" onSubmit={submit} noValidate>
+        {error && <div className="form-error">{error}</div>}
+        <div className="field">
+          <label htmlFor="login-email">Email</label>
+          <input id="login-email" className="input" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
         </div>
-      </section>
+        <div className="field">
+          <label htmlFor="login-password">Password</label>
+          <input id="login-password" className="input" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+        </div>
+        <button className="btn btn-primary btn-block btn-lg" disabled={busy || !email || !password}>
+          {busy ? 'Logging in…' : 'Log in'}
+        </button>
+        <p className="small muted" style={{ textAlign: 'center' }}>
+          New here? <Link to="/register">Create an account</Link>
+        </p>
+      </form>
+      {DEMO_MODE && (
+        <div className="card">
+          <div className="eyebrow">Sample accounts</div>
+          <div className="demo-pick">
+            <button type="button" onClick={() => go(DEMO_ACCOUNTS.donor.email, DEMO_ACCOUNTS.donor.password)}>
+              <strong>Donor</strong>
+              <span className="small muted mono">{DEMO_ACCOUNTS.donor.email}</span>
+            </button>
+            <button type="button" onClick={() => go(DEMO_ACCOUNTS.ngo.email, DEMO_ACCOUNTS.ngo.password)}>
+              <strong>NGO</strong>
+              <span className="small muted mono">{DEMO_ACCOUNTS.ngo.email}</span>
+            </button>
+          </div>
+          <p className="small muted">
+            Password for both: <span className="mono">demo123</span>
+          </p>
+        </div>
+      )}
     </div>
   )
-}
-
-/* ---------- Styles ---------- */
-
-const labelStyle: React.CSSProperties = {
-  display: 'block',
-  fontSize: '14px',
-  fontWeight: 500,
-  marginBottom: '6px',
-  color: '#374151',
-}
-
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '12px 14px',
-  fontSize: '15px',
-  borderRadius: '8px',
-  border: '1px solid #d1d5db',
-  boxSizing: 'border-box',
-}
-
-const primaryButton: React.CSSProperties = {
-  width: '100%',
-  padding: '14px',
-  fontSize: '16px',
-  fontWeight: 600,
-  backgroundColor: '#2563eb',
-  color: '#ffffff',
-  border: 'none',
-  borderRadius: '10px',
-  cursor: 'pointer',
 }

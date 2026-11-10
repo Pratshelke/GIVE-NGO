@@ -43,6 +43,12 @@ const requestSchema = new mongoose.Schema({
         }
     },
 
+    // Distance (km) from the donation to this NGO when the request was created
+    distanceKm: {
+        type: Number,
+        required: false
+    },
+
     // Timestamp for when donor responded to the request (optional)
     respondedAt: {
         type: Date,

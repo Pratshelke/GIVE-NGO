@@ -1,357 +1,193 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api } from '../lib/axios'
-import { DonationMap } from '../components/DonationMap'
-import { GooglePlacesInput } from '../components/GooglePlacesInput'
+import { useAuth } from '../contexts/AuthContext'
+import { api, errorMessage } from '../lib/axios'
+import { useLiveQuery } from '../lib/hooks'
+import { formatKm, haversineKm, MAX_DISTANCE_KM } from '../lib/geo'
+import type { Category, NgoPin } from '../lib/types'
+import { LocationPicker } from '../components/LocationPicker'
+import type { PickedLocation } from '../components/LocationPicker'
+import { MapCanvas } from '../components/MapCanvas'
+import { CATEGORIES } from '../components/ui'
+import { useToast } from '../components/Toast'
+
+const WINDOWS = [
+  { h: 1, label: '1 hour' },
+  { h: 2, label: '2 hours' },
+  { h: 4, label: '4 hours' },
+  { h: 8, label: 'Today' },
+]
 
 export function CreateDonationPage() {
+  const { user } = useAuth()
   const navigate = useNavigate()
+  const toast = useToast()
+  const [category, setCategory] = useState<Category>('cooked')
   const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
   const [quantity, setQuantity] = useState('')
-  const [locationName, setLocationName] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [servings, setServings] = useState('')
+  const [description, setDescription] = useState('')
+  const [windowH, setWindowH] = useState(2)
+  const [safe, setSafe] = useState(false)
+  const [loc, setLoc] = useState<PickedLocation | null>(
+    user?.location ? { address: user.address ?? 'My saved location', coords: user.location.coordinates } : null,
+  )
   const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
 
-  // Coordinates from Google Places selection
-  const [coordinates, setCoordinates] = useState<{ lat: number; lng: number } | null>(null)
+  const { data: ngos } = useLiveQuery(async () => (await api.get('/ngos')).data.ngos as NgoPin[], [], 15000)
 
-  // Handle place selection from Google Places Autocomplete
-  const handlePlaceSelect = (place: { lat: number; lng: number; formattedAddress: string }) => {
-    setLocationName(place.formattedAddress)
-    setCoordinates({ lat: place.lat, lng: place.lng })
-  }
+  const ranked = useMemo(() => {
+    if (!loc || !ngos) return []
+    return ngos
+      .filter((n) => n.isAvailable)
+      .map((n) => ({ ...n, km: haversineKm(loc.coords, n.location.coordinates) }))
+      .filter((n) => n.km <= MAX_DISTANCE_KM)
+      .sort((a, b) => a.km - b.km)
+  }, [loc, ngos])
 
-  // Validation
-  const validateForm = () => {
-    if (!title.trim()) return 'Donation title is required'
-    if (!description.trim()) return 'Description is required'
-    if (!quantity.trim()) return 'Quantity is required'
-    if (!coordinates) return 'Please select a pickup location from the suggestions'
-    return ''
-  }
-
-  const handleSubmit = async (e: React.FormEvent) => {
+  const submit = async (e: FormEvent) => {
     e.preventDefault()
     setError('')
-
-    // Validate form
-    const validationError = validateForm()
-    if (validationError) {
-      setError(validationError)
-      return
-    }
-
-    setLoading(true)
-
+    if (!title.trim() || !quantity.trim()) return setError('Add a short title and the quantity.')
+    if (!loc) return setError('Choose where the NGO should collect the food.')
+    if (!safe) return setError('Please confirm the food is safe to eat.')
+    setBusy(true)
     try {
-      // Backend will use req.user._id from JWT as donorId
       await api.post('/donations', {
         title: title.trim(),
-        description: description.trim(),
         quantity: quantity.trim(),
-        // Formatted pickup address for NGO display
-        address: locationName,
-        // Send actual geocoded coordinates in GeoJSON format [lng, lat]
-        location: {
-          type: 'Point',
-          coordinates: [coordinates!.lng, coordinates!.lat]
-        }
+        servings: servings ? Number(servings) : undefined,
+        category,
+        description: description.trim() || `${CATEGORIES.find((c) => c.key === category)?.label} ready for pickup.`,
+        address: loc.address,
+        location: { type: 'Point', coordinates: loc.coords },
+        expiresAt: new Date(Date.now() + windowH * 3600_000).toISOString(),
       })
-
-      // Navigate to donor dashboard on success
+      toast(ranked[0] ? `Posted! Offering it to ${ranked[0].name} first.` : 'Posted! We will notify NGOs as they come online.')
       navigate('/donor')
     } catch (err) {
-      console.error('Error creating donation:', err)
-      setError('Failed to create donation. Please try again.')
+      setError(errorMessage(err, 'Could not post the donation.'))
     } finally {
-      setLoading(false)
+      setBusy(false)
     }
   }
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        backgroundColor: '#f9fafb',
-        padding: '40px 32px',
-      }}
-    >
-      <div style={{ maxWidth: '900px', margin: '0 auto' }}>
-        {/* HEADER */}
-        <div style={{ marginBottom: '32px' }}>
-          <h1
-            style={{
-              fontSize: '32px',
-              fontWeight: 700,
-              color: '#1f2933',
-              marginBottom: '8px',
-            }}
-          >
-            Create Donation
-          </h1>
-          <p style={{ fontSize: '16px', color: '#4b5563' }}>
-            Share surplus food with NGOs in your area. Fill in the details below.
-          </p>
-        </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '32px' }}>
-          {/* FORM CARD */}
-          <div
-            style={{
-              backgroundColor: '#ffffff',
-              borderRadius: '16px',
-              border: '1px solid #e5e7eb',
-              padding: '32px',
-            }}
-          >
-            <form onSubmit={handleSubmit}>
-              {/* Error Message */}
-              {error && (
-                <div
-                  style={{
-                    padding: '12px 16px',
-                    backgroundColor: '#fef2f2',
-                    border: '1px solid #fecaca',
-                    borderRadius: '8px',
-                    color: '#dc2626',
-                    fontSize: '14px',
-                    marginBottom: '20px',
-                  }}
-                >
-                  {error}
-                </div>
-              )}
-
-              {/* Title */}
-              <FormField label="Donation Title" required>
-                <input
-                  type="text"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="e.g. Wedding Feast Leftovers"
-                  style={inputStyle}
-                />
-              </FormField>
-
-              {/* Description */}
-              <FormField label="Food Description" required>
-                <textarea
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="e.g. Cooked rice, dal, sabzi - freshly prepared today"
-                  rows={3}
-                  style={{ ...inputStyle, resize: 'vertical' }}
-                />
-              </FormField>
-
-              {/* Quantity */}
-              <FormField label="Quantity" required>
-                <input
-                  type="text"
-                  value={quantity}
-                  onChange={(e) => setQuantity(e.target.value)}
-                  placeholder="e.g. 100 plates, 50 kg"
-                  style={inputStyle}
-                />
-              </FormField>
-
-              {/* Location */}
-              <FormField label="Pickup Location" required>
-                <GooglePlacesInput
-                  placeholder="Search for pickup location (e.g., hotel name, address)..."
-                  onPlaceSelect={handlePlaceSelect}
-                />
-                {coordinates && (
-                  <div
-                    style={{
-                      marginTop: '8px',
-                      padding: '8px 12px',
-                      backgroundColor: '#f0fdf4',
-                      border: '1px solid #bbf7d0',
-                      borderRadius: '6px',
-                      color: '#16a34a',
-                      fontSize: '13px',
-                    }}
-                  >
-                    ✓ Location selected: {locationName}
-                  </div>
-                )}
-              </FormField>
-
-              {/* ACTIONS */}
-              <div
-                style={{
-                  display: 'flex',
-                  gap: '12px',
-                  marginTop: '24px',
-                }}
-              >
-                <button
-                  type="submit"
-                  disabled={loading}
-                  style={{
-                    ...primaryButton,
-                    opacity: loading ? 0.7 : 1,
-                    cursor: loading ? 'not-allowed' : 'pointer',
-                    flex: 1,
-                  }}
-                >
-                  {loading ? 'Creating...' : '🍽️ Create Donation'}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => navigate('/donor')}
-                  disabled={loading}
-                  style={{
-                    ...secondaryButton,
-                    cursor: loading ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
-          </div>
-
-          {/* MAP PREVIEW */}
-          <div
-            style={{
-              backgroundColor: '#ffffff',
-              borderRadius: '16px',
-              border: '1px solid #e5e7eb',
-              padding: '24px',
-              display: 'flex',
-              flexDirection: 'column',
-            }}
-          >
-            <h3
-              style={{
-                fontSize: '16px',
-                fontWeight: 600,
-                color: '#1f2933',
-                marginBottom: '16px',
-              }}
-            >
-              📍 Pickup Location Preview
-            </h3>
-
-            {/* Map Placeholder or Actual Map */}
-            {coordinates ? (
-              <DonationMap
-                latitude={coordinates.lat}
-                longitude={coordinates.lng}
-                label={locationName || 'Pickup Location'}
-                height={280}
-              />
-            ) : (
-              <div
-                style={{
-                  flex: 1,
-                  minHeight: '250px',
-                  backgroundColor: '#f3f4f6',
-                  borderRadius: '12px',
-                  border: '2px dashed #d1d5db',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: '#6b7280',
-                }}
-              >
-                <div style={{ fontSize: '48px', marginBottom: '12px' }}>🗺️</div>
-                <div style={{ fontSize: '15px', fontWeight: 500 }}>Map Preview</div>
-                <div style={{ fontSize: '13px', marginTop: '4px' }}>
-                  Enter an address and click "Locate on Map"
-                </div>
-              </div>
-            )}
-
-            {/* Location Info */}
-            {locationName && (
-              <div
-                style={{
-                  marginTop: '16px',
-                  padding: '12px 16px',
-                  backgroundColor: '#f0fdf4',
-                  borderRadius: '8px',
-                  border: '1px solid #bbf7d0',
-                }}
-              >
-                <div style={{ fontSize: '13px', color: '#16a34a', fontWeight: 500 }}>
-                  Selected Location
-                </div>
-                <div style={{ fontSize: '15px', color: '#1f2933', marginTop: '4px' }}>
-                  {locationName}
-                </div>
-              </div>
-            )}
-          </div>
+    <div className="container page">
+      <div className="page-head">
+        <div>
+          <span className="eyebrow">New donation</span>
+          <h2>What food do you have?</h2>
         </div>
       </div>
+      <form className="split" onSubmit={submit} noValidate>
+        <div className="card raised">
+          {error && <div className="form-error">{error}</div>}
+          <div className="field">
+            <label>Type of food</label>
+            <div className="chips">
+              {CATEGORIES.map((c) => (
+                <button type="button" key={c.key} className="chip" aria-pressed={category === c.key} onClick={() => setCategory(c.key)}>
+                  <span aria-hidden="true">{c.icon}</span>
+                  {c.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="field">
+            <label htmlFor="don-title">Title</label>
+            <input id="don-title" className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Veg pulao and dal from lunch buffet" />
+          </div>
+          <div className="grid-2" style={{ gap: 14 }}>
+            <div className="field">
+              <label htmlFor="don-qty">Quantity</label>
+              <input id="don-qty" className="input" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="e.g. 12 kg, 40 boxes" />
+            </div>
+            <div className="field">
+              <label htmlFor="don-serv">Feeds about</label>
+              <input id="don-serv" className="input" type="number" min={1} value={servings} onChange={(e) => setServings(e.target.value)} placeholder="people" />
+            </div>
+          </div>
+          <div className="field">
+            <label htmlFor="don-desc">Notes for the NGO</label>
+            <textarea id="don-desc" className="textarea" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="When was it cooked? Veg / non-veg? Do they need to bring containers?" />
+          </div>
+          <div className="field">
+            <label>Collect within</label>
+            <div className="segmented" role="group" aria-label="Pickup window">
+              {WINDOWS.map((w) => (
+                <button type="button" key={w.h} aria-pressed={windowH === w.h} onClick={() => setWindowH(w.h)}>
+                  {w.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <hr className="divider" />
+          <div className="field">
+            <label>Pickup location</label>
+          </div>
+          <LocationPicker value={loc} onChange={setLoc} idPrefix="don-loc" />
+          <label className="row" style={{ gap: 10, alignItems: 'flex-start', cursor: 'pointer' }}>
+            <input id="don-safe" type="checkbox" checked={safe} onChange={(e) => setSafe(e.target.checked)} style={{ marginTop: 4 }} />
+            <span className="small">The food is fresh, stored safely, and fit to eat. I'll hand it over within the pickup window.</span>
+          </label>
+          <button className="btn btn-primary btn-lg btn-block" disabled={busy}>
+            {busy ? 'Posting…' : 'Post donation'}
+          </button>
+        </div>
+
+        <div className="stack" style={{ position: 'sticky', top: 84 }}>
+          <div className="card">
+            <span className="eyebrow">Who gets asked first</span>
+            {!loc && <p className="muted">Pick a location to see the NGOs nearby.</p>}
+            {loc && ranked.length === 0 && (
+              <p className="muted">No available NGOs within {MAX_DISTANCE_KM} km. Your post stays open in case one comes online.</p>
+            )}
+            {ranked.length > 0 && (
+              <ol className="timeline">
+                {ranked.slice(0, 4).map((n, i) => (
+                  <li key={n._id}>
+                    <span className={`dot ${i === 0 ? 'live' : ''}`} />
+                    <span>
+                      <b>{n.name}</b>
+                      <br />
+                      <span className="small muted">{i === 0 ? 'Offered first, 10 min to respond' : `Next if #${i} passes`}</span>
+                    </span>
+                    <span className="mono small">{formatKm(n.km)}</span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
+          {loc && (
+            <MapCanvas
+              center={loc.coords}
+              zoom={12}
+              fitToMarkers={ranked.length > 0}
+              circles={[{ center: loc.coords, radiusKm: Math.min(MAX_DISTANCE_KM, Math.max(3, (ranked[3]?.km ?? ranked.at(-1)?.km ?? 5) + 1)) }]}
+              lines={ranked[0] ? [[loc.coords, ranked[0].location.coordinates]] : []}
+              markers={[
+                { id: 'me', kind: 'food', coords: loc.coords, popup: 'Your pickup point' },
+                ...ranked.slice(0, 6).map((n, i) => ({
+                  id: n._id,
+                  kind: 'ngo' as const,
+                  pulse: i === 0,
+                  coords: n.location.coordinates,
+                  popup: (
+                    <>
+                      <b>{n.name}</b>
+                      <br />
+                      {formatKm(n.km)} away
+                    </>
+                  ),
+                })),
+              ]}
+            />
+          )}
+        </div>
+      </form>
     </div>
   )
-}
-
-/* ---------- Reusable Components & Styles ---------- */
-
-function FormField({
-  label,
-  children,
-  required = false,
-}: {
-  label: string
-  children: React.ReactNode
-  required?: boolean
-}) {
-  return (
-    <div style={{ marginBottom: '20px' }}>
-      <label
-        style={{
-          display: 'block',
-          fontSize: '14px',
-          fontWeight: 500,
-          marginBottom: '6px',
-          color: '#374151',
-        }}
-      >
-        {label}
-        {required && <span style={{ color: '#dc2626', marginLeft: '4px' }}>*</span>}
-      </label>
-      {children}
-    </div>
-  )
-}
-
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '12px 14px',
-  fontSize: '15px',
-  borderRadius: '8px',
-  border: '1px solid #d1d5db',
-  boxSizing: 'border-box',
-  transition: 'border-color 0.2s',
-}
-
-const primaryButton: React.CSSProperties = {
-  padding: '14px 24px',
-  fontSize: '16px',
-  fontWeight: 600,
-  backgroundColor: '#2563eb',
-  color: '#ffffff',
-  border: 'none',
-  borderRadius: '10px',
-  cursor: 'pointer',
-}
-
-const secondaryButton: React.CSSProperties = {
-  padding: '14px 24px',
-  fontSize: '16px',
-  fontWeight: 600,
-  backgroundColor: '#ffffff',
-  color: '#374151',
-  border: '1px solid #d1d5db',
-  borderRadius: '10px',
-  cursor: 'pointer',
 }

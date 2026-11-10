@@ -4,6 +4,10 @@ const mongoose = require("mongoose");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
+if (!process.env.JWT_SECRET) {
+  console.warn("⚠️  JWT_SECRET not set, using an insecure development secret");
+  process.env.JWT_SECRET = "givengo-dev-secret";
+}
 
 // Import models
 const User = require("./models/User");
@@ -27,8 +31,6 @@ app.use(express.json());
 app.get("/health", (req, res) => {
   const state = mongoose.connection.readyState;
 
-  console.log("🔍 Debug - readyState:", state);
-  console.log("🔍 Debug - connection object:", mongoose.connection);
 
   res.json({
     ok: true,
@@ -94,11 +96,9 @@ app.post("/auth/register", async (req, res) => {
       phoneNumber
     };
 
-    // Add address and location for NGO
-    if (role === 'NGO') {
-      userData.address = address;
-      userData.location = location;
-    }
+    // NGOs must have address + location; donors may optionally save a default pickup point
+    if (address) userData.address = address;
+    if (location && location.coordinates) userData.location = location;
 
     // Create new user (password will be hashed by pre-save hook)
     const newUser = new User(userData);
@@ -208,15 +208,7 @@ app.get("/auth/me", auth, async (req, res) => {
       });
     }
 
-    res.status(200).json({
-      success: true,
-      user: {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role
-      }
-    });
+    res.status(200).json({ success: true, user: publicUser(user) });
   } catch (error) {
     console.error("❌ Error fetching user:", error.message);
     res.status(500).json({
@@ -312,7 +304,7 @@ app.get("/users/:id", async (req, res) => {
 app.put("/users/:id", auth, async (req, res) => {
   try {
     const userId = req.params.id;
-    const { phoneNumber, address, location } = req.body;
+    const { name, phoneNumber, address, location, isAvailable } = req.body;
 
     // Verify ownership - users can only update their own profile
     if (req.user._id.toString() !== userId) {
@@ -331,34 +323,18 @@ app.put("/users/:id", auth, async (req, res) => {
       });
     }
 
-    // Update phoneNumber if provided
-    if (phoneNumber) {
-      user.phoneNumber = phoneNumber;
-    }
-
-    // Only NGO can update address and location
-    if (user.role === 'NGO') {
-      if (address) {
-        user.address = address;
-      }
-      if (location && location.coordinates) {
-        user.location = location;
-      }
-    }
+    if (name) user.name = name;
+    if (phoneNumber) user.phoneNumber = phoneNumber;
+    if (address) user.address = address;
+    if (location && location.coordinates) user.location = location;
+    if (typeof isAvailable === 'boolean') user.isAvailable = isAvailable;
 
     await user.save();
 
     res.status(200).json({
       success: true,
       message: "Profile updated successfully",
-      user: {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        phoneNumber: user.phoneNumber,
-        address: user.address
-      }
+      user: publicUser(user)
     });
   } catch (error) {
     console.error("Error updating user:", error.message);
@@ -367,6 +343,95 @@ app.put("/users/:id", auth, async (req, res) => {
       message: "Failed to update profile",
       error: error.message
     });
+  }
+});
+
+
+// Shape a user document for API responses (never includes the password)
+function publicUser(u) {
+  return {
+    _id: u._id,
+    name: u.name,
+    email: u.email,
+    role: u.role,
+    phoneNumber: u.phoneNumber,
+    address: u.address,
+    location: u.location && u.location.coordinates && u.location.coordinates.length ? u.location : undefined,
+    isAvailable: u.isAvailable,
+    createdAt: u.createdAt
+  };
+}
+
+// ============================================
+// Public endpoints: map + impact numbers
+// ============================================
+
+// GET /ngos - NGOs with a location (for maps and "who gets asked first")
+app.get("/ngos", async (req, res) => {
+  try {
+    const ngos = await User.find({ role: 'NGO', 'location.coordinates.1': { $exists: true } });
+    res.json({
+      success: true,
+      ngos: ngos.map(n => ({ _id: n._id, name: n.name, address: n.address, location: n.location, isAvailable: n.isAvailable !== false }))
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to fetch NGOs", error: error.message });
+  }
+});
+
+// GET /stats - Public impact numbers
+app.get("/stats", async (req, res) => {
+  try {
+    const done = await Donation.find({ status: 'completed' });
+    const kg = done.reduce((s, d) => s + (/kg/i.test(d.quantity) ? parseFloat(d.quantity) || 0 : (d.servings || 0) * 0.3), 0);
+    res.json({
+      success: true,
+      stats: {
+        mealsServed: done.reduce((s, d) => s + (d.servings || 0), 0),
+        kgSaved: Math.round(kg),
+        donationsCompleted: done.length,
+        activeDonations: await Donation.countDocuments({ status: { $in: ['pending', 'reserved', 'in_transit'] } }),
+        ngos: await User.countDocuments({ role: 'NGO' }),
+        donors: await User.countDocuments({ role: 'Donor' })
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to fetch stats", error: error.message });
+  }
+});
+
+// GET /donations/public - Active donations for the live map (no contact details)
+app.get("/donations/public", async (req, res) => {
+  try {
+    const donations = await Donation.find({ status: { $in: ['pending', 'reserved', 'in_transit'] } })
+      .select('-description')
+      .populate('donorId', 'name')
+      .populate('currentNgoId', 'name');
+    res.json({ success: true, donations });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to fetch donations", error: error.message });
+  }
+});
+
+// GET /donations/:id/requests - Dispatch log for a donation (owner donor or any NGO)
+app.get("/donations/:id/requests", auth, async (req, res) => {
+  try {
+    const donation = await Donation.findById(req.params.id);
+    if (!donation) return res.status(404).json({ success: false, message: "Donation not found" });
+    if (req.user.role === 'Donor' && donation.donorId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ success: false, message: "Not your donation" });
+    }
+    const requests = await Request.find({ donationId: donation._id }).sort({ createdAt: 1 }).populate('ngoId', 'name');
+    res.json({
+      success: true,
+      requests: requests.map(r => ({
+        ...r.toObject(),
+        ngoId: r.ngoId ? r.ngoId._id : null,
+        ngoName: r.ngoId ? r.ngoId.name : 'NGO'
+      }))
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to fetch dispatch log", error: error.message });
   }
 });
 
@@ -424,7 +489,7 @@ app.get("/donations", auth, async (req, res) => {
       filter = {};
     }
 
-    const donations = await Donation.find(filter).populate('currentNgoId', 'name');
+    const donations = await Donation.find(filter).populate('currentNgoId', 'name phoneNumber').populate('donorId', 'name phoneNumber address email');
 
     // Check and update expired donations
     const now = new Date();

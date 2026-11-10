@@ -1,6 +1,6 @@
 # Root ignores
-web/node_modules
+node_modules
 web/dist
+web/dist-single
 .env*
-
-
+!.env.example

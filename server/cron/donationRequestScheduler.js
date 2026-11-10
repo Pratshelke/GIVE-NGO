@@ -38,7 +38,8 @@ function startDonationScheduler() {
             const expiredDonationsResult = await Donation.updateMany(
                 {
                     expiresAt: { $lte: now },
-                    status: { $nin: ['completed', 'expired'] }
+                    // Only donations nobody has accepted expire; reserved/in-transit ones keep going
+                    status: 'pending'
                 },
                 { $set: { status: 'expired' } }
             );
@@ -176,7 +177,8 @@ function startDonationScheduler() {
                     ngoId: nearestNgo.ngo._id,
                     status: 'pending',
                     createdAt: now,
-                    expiresAt: requestExpiresAt
+                    expiresAt: requestExpiresAt,
+                    distanceKm: Math.round(nearestNgo.distance * 10) / 10
                 });
 
                 await newRequest.save();

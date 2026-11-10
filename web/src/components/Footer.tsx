@@ -1,25 +1,15 @@
+import { DEMO_MODE } from '../lib/axios'
+
 export function Footer() {
-    return (
-      <footer
-        style={{
-          backgroundColor: '#ffffff',
-          borderTop: '1px solid #e5e7eb',
-          marginTop: 'auto',
-        }}
-      >
-        <div
-          style={{
-            maxWidth: '1280px',
-            margin: '0 auto',
-            padding: '16px 32px',
-            fontSize: '14px',
-            color: '#6b7280',
-            textAlign: 'center',
-          }}
-        >
-          © {new Date().getFullYear()} GiveNGo — Surplus Food Donation Platform
-        </div>
-      </footer>
-    )
-  }
-  
+  return (
+    <footer className="footer">
+      <div className="container">
+        <span>© {new Date().getFullYear()} GiveNGo · Surplus food, delivered to people who need it.</span>
+        <span>
+          {DEMO_MODE ? 'Demo mode: data is stored only in this browser.' : 'Connected to GiveNGo server.'} Maps © OpenStreetMap
+          contributors.
+        </span>
+      </div>
+    </footer>
+  )
+}

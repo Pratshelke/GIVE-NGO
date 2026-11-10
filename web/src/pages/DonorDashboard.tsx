@@ -1,574 +1,271 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api } from '../lib/axios'
+import { useAuth } from '../contexts/AuthContext'
+import { api, errorMessage } from '../lib/axios'
+import { timeAgo, timeLeft, useLiveQuery, useNow } from '../lib/hooks'
+import { formatKm } from '../lib/geo'
+import type { Donation, DonationRequest } from '../lib/types'
+import { CategoryIcon, StatusBadge, StatusStepper, STATUS_LABEL } from '../components/ui'
+import { useToast } from '../components/Toast'
 
-// Type for donation from API
-type Donation = {
-  _id: string
-  title: string
-  quantity: string
-  status: string
-  description?: string
-  createdAt: string
-  expiresAt?: string
-  currentNgoId?: { _id: string; name: string }
-}
-
-// Active statuses (donations in progress)
-const ACTIVE_STATUSES = ['pending', 'reserved', 'in_transit']
-// Past statuses (donations finished)
-const PAST_STATUSES = ['completed', 'expired']
+const ACTIVE = ['pending', 'reserved', 'in_transit']
 
 export function DonorDashboard() {
+  const { user } = useAuth()
   const navigate = useNavigate()
-  const [donations, setDonations] = useState<Donation[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [activeTab, setActiveTab] = useState<'active' | 'past'>('active')
-  const [cancellingId, setCancellingId] = useState<string | null>(null)
+  const [tab, setTab] = useState<'active' | 'past'>('active')
+  const { data, loading, error, reload } = useLiveQuery(async () => {
+    const r = await api.get('/donations')
+    return (r.data.donations as Donation[]).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  })
+  const donations = data ?? []
+  const active = donations.filter((d) => ACTIVE.includes(d.status))
+  const past = donations.filter((d) => !ACTIVE.includes(d.status))
+  const completed = donations.filter((d) => d.status === 'completed')
+  const servings = completed.reduce((s, d) => s + (d.servings ?? 0), 0)
+  const ngosHelped = new Set(completed.map((d) => d.currentNgoId?._id).filter(Boolean)).size
+  const shown = tab === 'active' ? active : past
 
-  // Edit modal state
-  const [editingDonation, setEditingDonation] = useState<Donation | null>(null)
-  const [editTitle, setEditTitle] = useState('')
-  const [editDescription, setEditDescription] = useState('')
-  const [editQuantity, setEditQuantity] = useState('')
-  const [editLoading, setEditLoading] = useState(false)
+  return (
+    <div className="container page">
+      <div className="page-head">
+        <div>
+          <span className="eyebrow">Donor dashboard</span>
+          <h2>Hi, {user?.name}</h2>
+        </div>
+        <button className="btn btn-primary" onClick={() => navigate('/donor/create')}>
+          + Donate food
+        </button>
+      </div>
 
-  // Fetch donations on mount
-  const fetchDonations = async () => {
+      <div className="stats-row">
+        <div className="card stat">
+          <span className="value">{servings}</span>
+          <span className="label">people fed</span>
+        </div>
+        <div className="card stat">
+          <span className="value">{completed.length}</span>
+          <span className="label">donations delivered</span>
+        </div>
+        <div className="card stat">
+          <span className="value">{ngosHelped}</span>
+          <span className="label">NGOs supported</span>
+        </div>
+        <div className="card stat">
+          <span className="value" style={{ color: active.length ? 'var(--accent)' : undefined }}>
+            {active.length}
+          </span>
+          <span className="label">in progress</span>
+        </div>
+      </div>
+
+      <div className="tabs" role="tablist">
+        <button role="tab" aria-selected={tab === 'active'} onClick={() => setTab('active')}>
+          In progress <span className="count">{active.length}</span>
+        </button>
+        <button role="tab" aria-selected={tab === 'past'} onClick={() => setTab('past')}>
+          History <span className="count">{past.length}</span>
+        </button>
+      </div>
+
+      {error ? <div className="form-error">{errorMessage(error, 'Could not load donations.')}</div> : null}
+      {loading && <p className="muted">Loading donations…</p>}
+      {!loading && shown.length === 0 && (
+        <div className="card empty">
+          <span className="big" aria-hidden="true">
+            {tab === 'active' ? '🍲' : '📜'}
+          </span>
+          <b>{tab === 'active' ? 'Nothing in progress' : 'No past donations yet'}</b>
+          <span>Have leftover food? Post it and we'll find the nearest NGO.</span>
+          <button className="btn btn-primary" onClick={() => navigate('/donor/create')}>
+            Donate food
+          </button>
+        </div>
+      )}
+      <div className="stack" style={{ gap: 16 }}>
+        {shown.map((d) => (
+          <DonorDonationCard key={d._id} donation={d} onChanged={reload} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function DonorDonationCard({ donation: d, onChanged }: { donation: Donation; onChanged: () => void }) {
+  const toast = useToast()
+  const now = useNow(1000)
+  const [showLog, setShowLog] = useState(d.status === 'pending')
+  const [confirmCancel, setConfirmCancel] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const { data: log } = useLiveQuery(
+    async () => (showLog ? ((await api.get(`/donations/${d._id}/requests`)).data.requests as DonationRequest[]) : []),
+    [showLog, d._id, d.status],
+    5000,
+  )
+  const ngo = d.currentNgoId
+
+  const cancel = async () => {
     try {
-      setError('')
-      const response = await api.get('/donations')
-      setDonations(response.data.donations || [])
-    } catch (err) {
-      console.error('Error fetching donations:', err)
-      setError('Failed to load donations. Please refresh.')
-    } finally {
-      setLoading(false)
+      await api.delete(`/donations/${d._id}`)
+      toast('Donation cancelled.')
+      onChanged()
+    } catch (e) {
+      toast(errorMessage(e), 'error')
     }
-  }
-
-  useEffect(() => {
-    fetchDonations()
-  }, [])
-
-  // Filter donations by status
-  const activeDonations = donations.filter(d => ACTIVE_STATUSES.includes(d.status))
-  const pastDonations = donations.filter(d => PAST_STATUSES.includes(d.status))
-
-  const displayedDonations = activeTab === 'active' ? activeDonations : pastDonations
-
-  // Handle cancel donation (only for pending)
-  const handleCancel = async (donationId: string) => {
-    if (!confirm('Are you sure you want to cancel this donation?')) return
-
-    setCancellingId(donationId)
-    try {
-      await api.delete(`/donations/${donationId}`)
-      await fetchDonations()
-    } catch (err: any) {
-      console.error('Error cancelling donation:', err)
-      alert(err.response?.data?.message || 'Failed to cancel donation.')
-    } finally {
-      setCancellingId(null)
-    }
-  }
-
-  // Open edit modal
-  const handleEditOpen = (donation: Donation) => {
-    setEditingDonation(donation)
-    setEditTitle(donation.title)
-    setEditDescription(donation.description || '')
-    setEditQuantity(donation.quantity)
-  }
-
-  // Close edit modal
-  const handleEditClose = () => {
-    setEditingDonation(null)
-    setEditTitle('')
-    setEditDescription('')
-    setEditQuantity('')
-  }
-
-  // Save edit
-  const handleEditSave = async () => {
-    if (!editingDonation) return
-
-    setEditLoading(true)
-    try {
-      await api.put(`/donations/${editingDonation._id}`, {
-        title: editTitle.trim(),
-        description: editDescription.trim(),
-        quantity: editQuantity.trim(),
-      })
-      await fetchDonations()
-      handleEditClose()
-    } catch (err: any) {
-      console.error('Error updating donation:', err)
-      alert(err.response?.data?.message || 'Failed to update donation.')
-    } finally {
-      setEditLoading(false)
-    }
+    setConfirmCancel(false)
   }
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        backgroundColor: '#f9fafb',
-        padding: '40px 32px',
-      }}
-    >
-      <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
-        {/* HEADER */}
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginBottom: '32px',
-          }}
-        >
-          <div>
-            <h1
-              style={{
-                fontSize: '32px',
-                fontWeight: 700,
-                color: '#1f2933',
-                marginBottom: '6px',
-              }}
-            >
-              Donor Dashboard
-            </h1>
-            <p style={{ color: '#4b5563', fontSize: '16px' }}>
-              Manage your donations and track their status.
-            </p>
-          </div>
-
-          <button
-            onClick={() => navigate('/donor/create')}
-            style={primaryButton}
-          >
-            + Create Donation
-          </button>
-        </div>
-
-        {/* TABS */}
-        <div
-          style={{
-            display: 'flex',
-            gap: '8px',
-            marginBottom: '24px',
-          }}
-        >
-          <TabButton
-            active={activeTab === 'active'}
-            onClick={() => setActiveTab('active')}
-            count={activeDonations.length}
-          >
-            Active Donations
-          </TabButton>
-          <TabButton
-            active={activeTab === 'past'}
-            onClick={() => setActiveTab('past')}
-            count={pastDonations.length}
-          >
-            Past Donations
-          </TabButton>
-        </div>
-
-        {/* ERROR STATE */}
-        {error && (
-          <div
-            style={{
-              padding: '16px',
-              backgroundColor: '#fef2f2',
-              border: '1px solid #fecaca',
-              borderRadius: '12px',
-              color: '#dc2626',
-              marginBottom: '24px',
-            }}
-          >
-            {error}
-          </div>
-        )}
-
-        {/* DONATIONS LIST */}
-        <div
-          style={{
-            backgroundColor: '#ffffff',
-            borderRadius: '16px',
-            border: '1px solid #e5e7eb',
-            overflow: 'hidden',
-          }}
-        >
-          {loading ? (
-            <div style={{ padding: '60px', textAlign: 'center', color: '#6b7280' }}>
-              <div style={{ fontSize: '24px', marginBottom: '12px' }}>⏳</div>
-              Loading donations...
+    <article className={`card ${d.status === 'pending' ? 'raised' : ''}`}>
+      <div className="dcard-head">
+        <div className="row" style={{ alignItems: 'flex-start', flexWrap: 'nowrap', minWidth: 0 }}>
+          <CategoryIcon category={d.category} />
+          <div className="stack" style={{ gap: 4, minWidth: 0 }}>
+            <h3>{d.title}</h3>
+            <div className="meta">
+              <span>⚖️ {d.quantity}</span>
+              {d.servings ? <span>🍽️ ~{d.servings} servings</span> : null}
+              <span>🕒 {timeAgo(d.createdAt, now)}</span>
+              {d.status === 'pending' && <span className="mono">⏳ {timeLeft(d.expiresAt, now)} left</span>}
             </div>
-          ) : displayedDonations.length === 0 ? (
-            <div style={{ padding: '60px', textAlign: 'center', color: '#6b7280' }}>
-              <div style={{ fontSize: '48px', marginBottom: '16px' }}>
-                {activeTab === 'active' ? '📦' : '📂'}
-              </div>
-              <div style={{ fontSize: '16px', fontWeight: 500 }}>
-                {activeTab === 'active'
-                  ? 'No active donations'
-                  : 'No past donations'}
-              </div>
-              <div style={{ fontSize: '14px', marginTop: '8px' }}>
-                {activeTab === 'active'
-                  ? 'Create your first donation to get started!'
-                  : 'Your completed and expired donations will appear here.'}
-              </div>
-              {activeTab === 'active' && (
-                <button
-                  onClick={() => navigate('/donor/create')}
-                  style={{ ...primaryButton, marginTop: '24px' }}
-                >
-                  Create Donation
+          </div>
+        </div>
+        <StatusBadge status={d.status} />
+      </div>
+
+      {d.status !== 'expired' && <StatusStepper status={d.status} />}
+
+      {ngo && d.status !== 'expired' && (
+        <div className="contact">
+          <div>
+            <div className="eyebrow">{d.status === 'completed' ? 'Delivered by' : 'Collecting NGO'}</div>
+            <b>{ngo.name}</b>
+          </div>
+          {ngo.phoneNumber && d.status !== 'completed' && <span className="mono">{ngo.phoneNumber}</span>}
+        </div>
+      )}
+
+      {showLog && log && log.length > 0 && (
+        <ul className="timeline" aria-label="Dispatch log">
+          {log.map((r) => (
+            <li key={r._id}>
+              <span className={`dot ${r.status === 'accepted' ? 'ok' : r.status === 'pending' ? 'live' : ''}`} />
+              <span>
+                Offered to <b>{r.ngoName}</b>
+                {r.distanceKm != null && <span className="muted"> · {formatKm(r.distanceKm)}</span>}
+                <br />
+                <span className="small muted">
+                  {r.status === 'pending'
+                    ? `Waiting for a reply · ${timeLeft(r.expiresAt, now)} left`
+                    : r.status === 'accepted'
+                      ? 'Accepted the pickup'
+                      : r.status === 'expired'
+                        ? 'No reply in time, moved on'
+                        : 'Could not take it, moved to the next nearest'}
+                </span>
+              </span>
+              <span className="mono small muted">{new Date(r.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {showLog && log && log.length === 0 && d.status === 'pending' && (
+        <p className="small muted">Looking for the nearest available NGO…</p>
+      )}
+
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <span className="small muted" style={{ minWidth: 0 }}>
+          📍 {d.address}
+        </span>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn btn-ghost btn-sm" onClick={() => setShowLog((s) => !s)}>
+            {showLog ? 'Hide dispatch log' : 'Dispatch log'}
+          </button>
+          {d.status === 'pending' && (
+            <>
+              <button className="btn btn-ghost btn-sm" onClick={() => setEditing(true)}>
+                Edit
+              </button>
+              {confirmCancel ? (
+                <>
+                  <button className="btn btn-danger btn-sm" onClick={cancel}>
+                    Yes, cancel it
+                  </button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => setConfirmCancel(false)}>
+                    Keep
+                  </button>
+                </>
+              ) : (
+                <button className="btn btn-danger btn-sm" onClick={() => setConfirmCancel(true)}>
+                  Cancel
                 </button>
               )}
-            </div>
-          ) : (
-            displayedDonations.map((donation) => (
-              <DonationCard
-                key={donation._id}
-                donation={donation}
-                onCancel={() => handleCancel(donation._id)}
-                onEdit={() => handleEditOpen(donation)}
-                isCancelling={cancellingId === donation._id}
-              />
-            ))
+            </>
           )}
         </div>
       </div>
-
-      {/* EDIT MODAL */}
-      {editingDonation && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-          }}
-          onClick={handleEditClose}
-        >
-          <div
-            style={{
-              backgroundColor: '#ffffff',
-              borderRadius: '16px',
-              padding: '32px',
-              width: '100%',
-              maxWidth: '480px',
-              boxShadow: '0 20px 40px rgba(0,0,0,0.2)',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 style={{ fontSize: '20px', fontWeight: 600, marginBottom: '24px' }}>
-              Edit Donation
-            </h2>
-
-            <div style={{ marginBottom: '16px' }}>
-              <label style={labelStyle}>Title</label>
-              <input
-                type="text"
-                value={editTitle}
-                onChange={(e) => setEditTitle(e.target.value)}
-                style={inputStyle}
-                disabled={editLoading}
-              />
-            </div>
-
-            <div style={{ marginBottom: '16px' }}>
-              <label style={labelStyle}>Description</label>
-              <textarea
-                value={editDescription}
-                onChange={(e) => setEditDescription(e.target.value)}
-                rows={3}
-                style={{ ...inputStyle, resize: 'vertical' }}
-                disabled={editLoading}
-              />
-            </div>
-
-            <div style={{ marginBottom: '24px' }}>
-              <label style={labelStyle}>Quantity</label>
-              <input
-                type="text"
-                value={editQuantity}
-                onChange={(e) => setEditQuantity(e.target.value)}
-                style={inputStyle}
-                disabled={editLoading}
-              />
-            </div>
-
-            <div style={{ display: 'flex', gap: '12px' }}>
-              <button
-                onClick={handleEditSave}
-                disabled={editLoading}
-                style={{
-                  ...primaryButton,
-                  flex: 1,
-                  opacity: editLoading ? 0.7 : 1,
-                }}
-              >
-                {editLoading ? 'Saving...' : 'Save Changes'}
-              </button>
-              <button
-                onClick={handleEditClose}
-                disabled={editLoading}
-                style={{
-                  ...secondaryButton,
-                  flex: 1,
-                }}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      {editing && <EditModal donation={d} onClose={() => setEditing(false)} onSaved={onChanged} />}
+    </article>
   )
 }
 
-/* ---------- Components ---------- */
+function EditModal({ donation, onClose, onSaved }: { donation: Donation; onClose: () => void; onSaved: () => void }) {
+  const toast = useToast()
+  const [title, setTitle] = useState(donation.title)
+  const [quantity, setQuantity] = useState(donation.quantity)
+  const [servings, setServings] = useState(String(donation.servings ?? ''))
+  const [description, setDescription] = useState(donation.description)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
 
-function DonationCard({
-  donation,
-  onCancel,
-  onEdit,
-  isCancelling,
-}: {
-  donation: Donation
-  onCancel: () => void
-  onEdit: () => void
-  isCancelling: boolean
-}) {
-  const statusInfo = getStatusInfo(donation.status)
-  const isPending = donation.status === 'pending'
-
-  return (
-    <div
-      style={{
-        padding: '20px 24px',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        borderBottom: '1px solid #e5e7eb',
-      }}
-    >
-      {/* Left: Info */}
-      <div style={{ flex: 1 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <span style={{ fontSize: '16px', fontWeight: 600, color: '#1f2933' }}>
-            {donation.title}
-          </span>
-          <span
-            style={{
-              padding: '4px 10px',
-              borderRadius: '999px',
-              fontSize: '12px',
-              fontWeight: 500,
-              backgroundColor: statusInfo.bgColor,
-              color: statusInfo.color,
-            }}
-          >
-            {statusInfo.label}
-          </span>
-        </div>
-        <div style={{ fontSize: '14px', color: '#6b7280', marginTop: '6px' }}>
-          {donation.description && `${donation.description} · `}
-          Quantity: {donation.quantity}
-        </div>
-        <div style={{ fontSize: '13px', color: '#9ca3af', marginTop: '4px' }}>
-          {statusInfo.helpText}
-        </div>
-        {['reserved', 'in_transit', 'completed'].includes(donation.status) && donation.currentNgoId && (
-          <div style={{ fontSize: '13px', color: '#16a34a', marginTop: '4px', fontWeight: 500 }}>
-            Pick up accepted by: {donation.currentNgoId.name}
-          </div>
-        )}
-      </div>
-
-      {/* Right: Actions (only for pending) */}
-      {isPending && (
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button
-            onClick={onEdit}
-            style={{
-              padding: '8px 16px',
-              fontSize: '14px',
-              fontWeight: 500,
-              backgroundColor: '#f3f4f6',
-              color: '#374151',
-              border: 'none',
-              borderRadius: '8px',
-              cursor: 'pointer',
-            }}
-          >
-            ✏️ Edit
-          </button>
-          <button
-            onClick={onCancel}
-            disabled={isCancelling}
-            style={{
-              padding: '8px 16px',
-              fontSize: '14px',
-              fontWeight: 500,
-              backgroundColor: '#fef2f2',
-              color: '#dc2626',
-              border: 'none',
-              borderRadius: '8px',
-              cursor: isCancelling ? 'not-allowed' : 'pointer',
-              opacity: isCancelling ? 0.7 : 1,
-            }}
-          >
-            {isCancelling ? 'Cancelling...' : '✕ Cancel'}
-          </button>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function TabButton({
-  children,
-  active,
-  onClick,
-  count,
-}: {
-  children: React.ReactNode
-  active: boolean
-  onClick: () => void
-  count: number
-}) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        padding: '10px 20px',
-        fontSize: '14px',
-        fontWeight: 500,
-        backgroundColor: active ? '#2563eb' : '#ffffff',
-        color: active ? '#ffffff' : '#374151',
-        border: active ? 'none' : '1px solid #e5e7eb',
-        borderRadius: '8px',
-        cursor: 'pointer',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '8px',
-      }}
-    >
-      {children}
-      <span
-        style={{
-          backgroundColor: active ? 'rgba(255,255,255,0.2)' : '#f3f4f6',
-          padding: '2px 8px',
-          borderRadius: '999px',
-          fontSize: '12px',
-        }}
-      >
-        {count}
-      </span>
-    </button>
-  )
-}
-
-/* ---------- Helpers ---------- */
-
-function getStatusInfo(status: string) {
-  switch (status) {
-    case 'pending':
-      return {
-        label: 'Pending',
-        color: '#b45309',
-        bgColor: '#fef3c7',
-        helpText: '⏳ Waiting for an NGO to accept',
-      }
-    case 'reserved':
-      return {
-        label: 'Reserved',
-        color: '#1d4ed8',
-        bgColor: '#dbeafe',
-        helpText: '✅ NGO has accepted. Waiting for pickup.',
-      }
-    case 'in_transit':
-      return {
-        label: 'Pickup in Progress',
-        color: '#7c3aed',
-        bgColor: '#ede9fe',
-        helpText: '🚗 NGO is on the way for pickup',
-      }
-    case 'completed':
-      return {
-        label: 'Completed',
-        color: '#16a34a',
-        bgColor: '#dcfce7',
-        helpText: 'Successfully donated',
-      }
-    case 'expired':
-      return {
-        label: 'Expired',
-        color: '#6b7280',
-        bgColor: '#f3f4f6',
-        helpText: 'Donation expired or cancelled',
-      }
-    default:
-      return {
-        label: status,
-        color: '#6b7280',
-        bgColor: '#f3f4f6',
-        helpText: '',
-      }
+  const save = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await api.put(`/donations/${donation._id}`, { title, quantity, description, servings: servings || undefined })
+      toast('Donation updated.')
+      onSaved()
+      onClose()
+    } catch (e) {
+      setError(errorMessage(e))
+    } finally {
+      setBusy(false)
+    }
   }
-}
 
-/* ---------- Styles ---------- */
-
-const primaryButton: React.CSSProperties = {
-  padding: '14px 24px',
-  fontSize: '16px',
-  fontWeight: 600,
-  backgroundColor: '#2563eb',
-  color: '#ffffff',
-  border: 'none',
-  borderRadius: '10px',
-  cursor: 'pointer',
-}
-
-const secondaryButton: React.CSSProperties = {
-  padding: '14px 24px',
-  fontSize: '16px',
-  fontWeight: 600,
-  backgroundColor: '#ffffff',
-  color: '#374151',
-  border: '1px solid #d1d5db',
-  borderRadius: '10px',
-  cursor: 'pointer',
-}
-
-const labelStyle: React.CSSProperties = {
-  display: 'block',
-  fontSize: '14px',
-  fontWeight: 500,
-  marginBottom: '6px',
-  color: '#374151',
-}
-
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '12px 14px',
-  fontSize: '15px',
-  borderRadius: '8px',
-  border: '1px solid #d1d5db',
-  boxSizing: 'border-box',
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="card raised modal" role="dialog" aria-modal="true" aria-labelledby="edit-title" onClick={(e) => e.stopPropagation()}>
+        <h3 id="edit-title">Edit donation</h3>
+        <p className="small muted">You can edit while the status is “{STATUS_LABEL.pending}”.</p>
+        {error && <div className="form-error">{error}</div>}
+        <div className="field">
+          <label htmlFor="edit-t">Title</label>
+          <input id="edit-t" className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
+        </div>
+        <div className="grid-2" style={{ gap: 12 }}>
+          <div className="field">
+            <label htmlFor="edit-q">Quantity</label>
+            <input id="edit-q" className="input" value={quantity} onChange={(e) => setQuantity(e.target.value)} />
+          </div>
+          <div className="field">
+            <label htmlFor="edit-s">Feeds about</label>
+            <input id="edit-s" className="input" type="number" value={servings} onChange={(e) => setServings(e.target.value)} />
+          </div>
+        </div>
+        <div className="field">
+          <label htmlFor="edit-d">Notes</label>
+          <textarea id="edit-d" className="textarea" value={description} onChange={(e) => setDescription(e.target.value)} />
+        </div>
+        <div className="row" style={{ justifyContent: 'flex-end' }}>
+          <button className="btn btn-ghost" onClick={onClose}>
+            Close
+          </button>
+          <button className="btn btn-primary" onClick={save} disabled={busy}>
+            {busy ? 'Saving…' : 'Save changes'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }

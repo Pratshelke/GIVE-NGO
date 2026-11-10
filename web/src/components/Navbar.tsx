@@ -1,221 +1,180 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import { api, DEMO_MODE } from '../lib/axios'
+import { timeAgo, useLiveQuery } from '../lib/hooks'
+import type { Notification } from '../lib/types'
+import { BellIcon, initials, Logo } from './ui'
+import { useToast } from './Toast'
 
-export function Navbar() {
-  const location = useLocation()
+function useClickOutside(onOutside: () => void) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const h = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onOutside()
+    }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [onOutside])
+  return ref
+}
+
+function Notifications() {
   const navigate = useNavigate()
-  const { user, logout } = useAuth()
-  const [showDropdown, setShowDropdown] = useState(false)
+  const toast = useToast()
+  const [open, setOpen] = useState(false)
+  const ref = useClickOutside(() => setOpen(false))
+  const seen = useRef<Set<string> | null>(null)
+  const { data } = useLiveQuery(async () => {
+    const r = await api.get('/notifications')
+    return r.data.notifications as Notification[]
+  }, [], 4000)
+  const list = data ?? []
+  const unread = list.filter((n) => !n.read).length
 
-  const hideUserInfo =
-    location.pathname === '/' ||
-    location.pathname === '/login' ||
-    location.pathname === '/register'
+  // Surface brand-new notifications as toasts
+  useEffect(() => {
+    if (!data) return
+    if (seen.current) {
+      for (const n of data) if (!seen.current.has(n._id) && !n.read) toast(n.text, 'info')
+    }
+    seen.current = new Set(data.map((n) => n._id))
+  }, [data, toast])
 
-  // Determine dashboard path from user role
-  const dashboardPath = user?.role === 'NGO' ? '/ngo' : '/donor'
-
-  const handleLogout = () => {
-    logout()
-    navigate('/')
-    setShowDropdown(false)
+  const toggle = async () => {
+    setOpen((o) => !o)
+    if (!open && unread) await api.post('/notifications/read').catch(() => {})
   }
 
   return (
-    <header
-      style={{
-        height: '64px',
-        backgroundColor: '#ffffff',
-        borderBottom: '1px solid #e5e7eb',
-        display: 'flex',
-        alignItems: 'center',
-        position: 'relative',
-        zIndex: 100,
-      }}
-    >
-      <div
-        style={{
-          maxWidth: '1280px',
-          width: '100%',
-          margin: '0 auto',
-          padding: '0 32px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        {/* LEFT - Clickable Logo */}
-        <div
-          onClick={() => navigate(hideUserInfo ? '/' : dashboardPath)}
-          style={{
-            fontSize: '20px',
-            fontWeight: 700,
-            color: '#1f2933',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-          }}
-        >
-          GiveNGo
-        </div>
-
-        {/* RIGHT - User Profile */}
-        {!hideUserInfo && (
-          <div style={{ position: 'relative' }}>
-            <div
-              onClick={() => setShowDropdown(!showDropdown)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '10px',
-                color: '#374151',
-                fontSize: '14px',
-                fontWeight: 500,
-                cursor: 'pointer',
-                padding: '8px 12px',
-                borderRadius: '8px',
-                backgroundColor: showDropdown ? '#f3f4f6' : 'transparent',
-                transition: 'background-color 0.2s',
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button className="icon-btn" aria-label={`Notifications${unread ? `, ${unread} unread` : ''}`} onClick={toggle}>
+        <BellIcon />
+        {unread > 0 && <span className="dot-badge">{unread}</span>}
+      </button>
+      {open && (
+        <div className="popover" role="menu">
+          <div className="eyebrow" style={{ padding: '6px 12px' }}>
+            Updates
+          </div>
+          {list.length === 0 && <p className="muted small" style={{ padding: '6px 12px 12px' }}>No updates yet.</p>}
+          {list.slice(0, 8).map((n) => (
+            <button
+              key={n._id}
+              className={`item ${n.read ? '' : 'unread'}`}
+              onClick={() => {
+                setOpen(false)
+                if (n.link) navigate(n.link)
               }}
             >
-              <span>{user?.name || 'User'}</span>
-              <div
-                style={{
-                  width: '32px',
-                  height: '32px',
-                  borderRadius: '50%',
-                  backgroundColor: user?.role === 'NGO' ? '#16a34a' : '#2563eb',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: '14px',
-                  fontWeight: 600,
-                  color: '#ffffff',
-                }}
-              >
-                {user?.name?.charAt(0).toUpperCase() || 'U'}
-              </div>
-              <span style={{ fontSize: '12px' }}>▼</span>
-            </div>
-
-            {/* Dropdown Menu */}
-            {showDropdown && (
-              <>
-                {/* Overlay to close dropdown */}
-                <div
-                  onClick={() => setShowDropdown(false)}
-                  style={{
-                    position: 'fixed',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    zIndex: 99,
-                  }}
-                />
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: '100%',
-                    right: 0,
-                    marginTop: '8px',
-                    backgroundColor: '#ffffff',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '12px',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                    minWidth: '200px',
-                    overflow: 'hidden',
-                    zIndex: 100,
-                  }}
-                >
-                  {/* User Info Header */}
-                  <div
-                    style={{
-                      padding: '16px',
-                      borderBottom: '1px solid #e5e7eb',
-                      backgroundColor: '#f9fafb',
-                    }}
-                  >
-                    <div style={{ fontWeight: 600, color: '#1f2933' }}>{user?.name}</div>
-                    <div style={{ fontSize: '13px', color: '#6b7280', marginTop: '2px' }}>
-                      {user?.email}
-                    </div>
-                    <div
-                      style={{
-                        fontSize: '12px',
-                        color: user?.role === 'NGO' ? '#16a34a' : '#2563eb',
-                        fontWeight: 500,
-                        marginTop: '4px',
-                        textTransform: 'uppercase',
-                      }}
-                    >
-                      {user?.role === 'NGO' ? '🏢 NGO Account' : '🎁 Donor Account'}
-                    </div>
-                  </div>
-
-                  {/* Menu Items */}
-                  <div style={{ padding: '8px' }}>
-                    <DropdownItem
-                      label="View Profile"
-                      onClick={() => {
-                        navigate('/profile')
-                        setShowDropdown(false)
-                      }}
-                    />
-                    <DropdownItem
-                      label="Edit Profile"
-                      onClick={() => {
-                        navigate('/profile')
-                        setShowDropdown(false)
-                      }}
-                    />
-                    <div style={{ height: '1px', backgroundColor: '#e5e7eb', margin: '8px 0' }} />
-                    <DropdownItem
-                      label="Logout"
-                      onClick={handleLogout}
-                      isDestructive
-                    />
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-        )}
-      </div>
-    </header>
+              <span style={{ fontWeight: 600 }}>{n.text}</span>
+              <span className="muted small">{timeAgo(n.createdAt)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
-function DropdownItem({
-  label,
-  onClick,
-  isDestructive = false,
-}: {
-  label: string
-  onClick: () => void
-  isDestructive?: boolean
-}) {
+function UserMenu() {
+  const { user, logout } = useAuth()
+  const navigate = useNavigate()
+  const [open, setOpen] = useState(false)
+  const ref = useClickOutside(() => setOpen(false))
+  if (!user) return null
   return (
-    <button
-      onClick={onClick}
-      style={{
-        width: '100%',
-        padding: '10px 12px',
-        textAlign: 'left',
-        border: 'none',
-        backgroundColor: 'transparent',
-        color: isDestructive ? '#dc2626' : '#374151',
-        fontSize: '14px',
-        cursor: 'pointer',
-        borderRadius: '6px',
-        transition: 'background-color 0.15s',
-      }}
-      onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f3f4f6')}
-      onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-    >
-      {label}
-    </button>
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button className="avatar" aria-label="Account menu" onClick={() => setOpen((o) => !o)}>
+        {initials(user.name)}
+      </button>
+      {open && (
+        <div className="popover" role="menu" style={{ width: 240 }}>
+          <div style={{ padding: '8px 12px' }}>
+            <div style={{ fontWeight: 700 }}>{user.name}</div>
+            <div className="muted small">
+              {user.role === 'NGO' ? 'NGO partner' : 'Donor'} · {user.email}
+            </div>
+          </div>
+          <hr className="divider" />
+          <button className="item" onClick={() => (setOpen(false), navigate('/profile'))}>
+            Profile & location
+          </button>
+          <button
+            className="item"
+            onClick={() => {
+              setOpen(false)
+              logout()
+              navigate('/')
+            }}
+          >
+            Log out
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function Navbar() {
+  const { user } = useAuth()
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
+  const links = !user
+    ? [
+        { to: '/', label: 'How it works' },
+        { to: '/map', label: 'Live map' },
+      ]
+    : user.role === 'Donor'
+      ? [
+          { to: '/donor', label: 'My donations' },
+          { to: '/donor/create', label: 'Donate food' },
+          { to: '/map', label: 'Live map' },
+        ]
+      : [
+          { to: '/ngo', label: 'Pickups' },
+          { to: '/map', label: 'Live map' },
+        ]
+
+  return (
+    <header className="nav">
+      <div className="container nav-inner">
+        <button className="brand" onClick={() => navigate(user ? (user.role === 'NGO' ? '/ngo' : '/donor') : '/')}>
+          <span className="brand-mark">
+            <Logo />
+          </span>
+          GiveNGo
+        </button>
+        <nav className="nav-links" aria-label="Main">
+          {links.map((l) => (
+            <button key={l.to} className={`nav-link ${pathname === l.to ? 'active' : ''}`} onClick={() => navigate(l.to)}>
+              {l.label}
+            </button>
+          ))}
+        </nav>
+        <div className="nav-right">
+          {user ? (
+            <>
+              {user.role === 'Donor' && pathname !== '/donor/create' && (
+                <button className="btn btn-primary btn-sm" onClick={() => navigate('/donor/create')}>
+                  + Donate
+                </button>
+              )}
+              {DEMO_MODE && <Notifications key={user._id} />}
+              <UserMenu />
+            </>
+          ) : (
+            <>
+              <button className="btn btn-ghost btn-sm" onClick={() => navigate('/login')}>
+                Log in
+              </button>
+              <button className="btn btn-primary btn-sm" onClick={() => navigate('/register')}>
+                Join
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </header>
   )
 }

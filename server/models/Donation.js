@@ -23,6 +23,17 @@ const donationSchema = new mongoose.Schema({
         required: true
     },
 
+    // Optional: food category and estimated servings (used for impact numbers)
+    category: {
+        type: String,
+        enum: ['cooked', 'produce', 'bakery', 'packaged', 'dairy', 'other'],
+        default: 'other'
+    },
+    servings: {
+        type: Number,
+        required: false
+    },
+
     // Reference to the User who is donating (Donor)
     // This creates a relationship between Donation and User collections
     donorId: {

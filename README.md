@@ -7,7 +7,7 @@ A web app that connects people with surplus food to nearby NGOs. A donor posts a
 1. A donor registers and posts a donation with a pickup location and an expiry time.
 2. A scheduler runs every minute and offers the donation to NGOs one at a time, nearest first, within 20 km.
 3. An NGO accepts or rejects the request. A rejected or expired request moves to the next nearest NGO.
-4. The donor confirms pickup, and the donation is marked complete on delivery.
+4. The NGO confirms pickup and marks the donation complete on delivery.
 
 ## Features
 
